@@ -6,7 +6,6 @@ import ChatView from '../components/ChatView'
 import './Dashboard.css'
 
 const Dashboard = () => {
-  const [user, setUser] = useState<any>(null)
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null)
   const [refreshContacts, setRefreshContacts] = useState(0)
   const navigate = useNavigate()
@@ -16,17 +15,10 @@ const Dashboard = () => {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) {
         navigate('/login')
-      } else {
-        setUser(user)
       }
     }
     getUser()
   }, [navigate])
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    navigate('/login')
-  }
 
   return (
     <div className="dashboard-container">

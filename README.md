@@ -83,3 +83,48 @@ src/
 ## Adding Logo and Favicon
 
 Replace the placeholder logo in `src/pages/Login.tsx` and add your favicon to the `public` folder.
+
+## Deployment to Vercel
+
+### Quick Deploy
+
+1. **Install Vercel CLI** (optional, for CLI deployment):
+   ```bash
+   npm i -g vercel
+   ```
+
+2. **Deploy via Vercel Dashboard:**
+   - Go to https://vercel.com
+   - Click "Add New Project"
+   - Import your GitHub repository: `Harshitvishnoiatbrightrays/whatsapp-automation`
+   - Vercel will auto-detect Vite settings
+
+3. **Configure Environment Variables:**
+   In Vercel dashboard, add these environment variables:
+   - `VITE_SUPABASE_URL` - Your Supabase project URL
+   - `VITE_SUPABASE_ANON_KEY` - Your Supabase anon key
+   - `VITE_EMAIL_DOMAIN` - Email domain for username conversion (optional)
+   - `VITE_N8N_WEBHOOK_URL` - Your n8n webhook URL
+
+4. **Deploy:**
+   - Click "Deploy"
+   - Your app will be live at `https://your-project.vercel.app`
+
+### Deploy via CLI
+
+```bash
+# Login to Vercel
+vercel login
+
+# Deploy
+vercel
+
+# For production deployment
+vercel --prod
+```
+
+### Important Notes
+
+- Make sure all environment variables are set in Vercel dashboard
+- The app uses client-side routing (React Router), so Vercel is configured to redirect all routes to `index.html`
+- Build output directory is `dist` (Vite default)
