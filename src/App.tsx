@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from './lib/supabase'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
+import ErrorBoundary from './components/ErrorBoundary'
 import './App.css'
 
 function App() {
@@ -35,18 +36,20 @@ function App() {
   }
 
   return (
-    <Router>
-      <Routes>
-        <Route
-          path="/login"
-          element={session ? <Navigate to="/" replace /> : <Login />}
-        />
-        <Route
-          path="/"
-          element={session ? <Dashboard /> : <Navigate to="/login" replace />}
-        />
-      </Routes>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <Routes>
+          <Route
+            path="/login"
+            element={session ? <Navigate to="/" replace /> : <Login />}
+          />
+          <Route
+            path="/"
+            element={session ? <Dashboard /> : <Navigate to="/login" replace />}
+          />
+        </Routes>
+      </Router>
+    </ErrorBoundary>
   )
 }
 

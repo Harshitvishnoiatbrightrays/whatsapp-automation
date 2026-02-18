@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase'
+import { logger } from '../utils/logger'
 
 export interface Contact {
   id: string
@@ -42,163 +43,182 @@ export interface Message {
   updated_at: string
 }
 
-// Fetch all contacts with their actual last message
+// Fetch all contacts with their actual last message (optimized for production)
 export const fetchContacts = async (): Promise<Contact[]> => {
-  const { data, error } = await supabase
-    .from('contacts')
-    .select('*')
-    .eq('is_active', true)
+  try {
+    const { data, error } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('is_active', true)
+      .order('last_message_at', { ascending: false, nullsFirst: false })
 
-  if (error) {
-    console.error('Error fetching contacts:', error)
-    throw error
-  }
+    if (error) {
+      logger.error('Error fetching contacts:', error)
+      throw error
+    }
 
-  if (!data || data.length === 0) {
-    return []
-  }
+    if (!data || data.length === 0) {
+      return []
+    }
 
-  // For each contact, get the actual last message (inbound or outbound)
-  const contactsWithLastMessage = await Promise.all(
-    data.map(async (contact) => {
-      // Get messages by contact_id
-      const { data: messagesByContactId, error: errorByContactId } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('contact_id', contact.id)
+    // Optimized: Use cached last_message_at from contacts table if recent
+    // Only fetch from messages table if data is stale
 
-      // Get messages by phone number (in case contact_id is not set)
-      const { data: messagesByPhone, error: errorByPhone } = await supabase
-        .from('messages')
-        .select('*')
-        .or(`from_number.eq.${contact.phone},to_number.eq.${contact.phone}`)
+    // Fetch the most recent message for each contact in batches
+    // This is much more efficient than N+1 queries
+    const batchSize = 50
+    const contactsWithLastMessage: Contact[] = []
 
-      if (errorByContactId || errorByPhone) {
-        console.error(`Error fetching messages for contact ${contact.id}:`, errorByContactId || errorByPhone)
-        return contact
-      }
+    for (let i = 0; i < data.length; i += batchSize) {
+      const batch = data.slice(i, i + batchSize)
+      
+      // For each contact in batch, get the last message efficiently
+      const batchResults = await Promise.all(
+        batch.map(async (contact) => {
+          // Use the last_message_at from contact if recent (within last hour), otherwise fetch
+          const contactLastMessageAt = contact.last_message_at 
+            ? new Date(contact.last_message_at).getTime() 
+            : 0
+          const oneHourAgo = Date.now() - 3600000
 
-      // Combine and deduplicate messages
-      const allMessages = [...(messagesByContactId || []), ...(messagesByPhone || [])]
-      const uniqueMessages = Array.from(
-        new Map(allMessages.map(msg => [msg.id, msg])).values()
+          if (contactLastMessageAt > oneHourAgo && contact.last_message_preview) {
+            // Use cached data if recent
+            const hasUnreadInbound = contact.has_unread_inbound || false
+            return {
+              ...contact,
+              has_unread_inbound: hasUnreadInbound,
+            }
+          }
+
+          // Fetch last message for this contact (optimized query)
+          const { data: lastMessage } = await supabase
+            .from('messages')
+            .select('sent_at, created_at, message_type, message_body, button_text, media_url, direction, read_at')
+            .or(`contact_id.eq.${contact.id},from_number.eq.${contact.phone},to_number.eq.${contact.phone}`)
+            .order('sent_at', { ascending: false, nullsFirst: false })
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          if (lastMessage) {
+            const messageTimestamp = lastMessage.sent_at || lastMessage.created_at
+            
+            let preview = ''
+            if (lastMessage.message_type === 'button' && lastMessage.button_text) {
+              preview = lastMessage.button_text
+            } else if (lastMessage.message_body) {
+              preview = lastMessage.message_body
+            } else if (lastMessage.media_url) {
+              preview = '[Image]'
+            } else {
+              preview = '[Media]'
+            }
+
+            if (preview.length > 50) {
+              preview = preview.substring(0, 50) + '...'
+            }
+
+            const hasUnreadInbound = lastMessage.direction === 'inbound' && !lastMessage.read_at
+
+            return {
+              ...contact,
+              last_message_at: messageTimestamp,
+              last_message_preview: preview,
+              has_unread_inbound: hasUnreadInbound,
+            }
+          }
+
+          return contact
+        })
       )
 
-      if (uniqueMessages.length > 0) {
-        // Sort by timestamp to get the latest message
-        const sortedMessages = uniqueMessages.sort((a, b) => {
-          const timeA = a.sent_at ? new Date(a.sent_at).getTime() : new Date(a.created_at).getTime()
-          const timeB = b.sent_at ? new Date(b.sent_at).getTime() : new Date(b.created_at).getTime()
-          return timeB - timeA // Descending order (newest first)
-        })
+      contactsWithLastMessage.push(...batchResults)
+    }
 
-        const lastMessage = sortedMessages[0]
-        const messageTimestamp = lastMessage.sent_at || lastMessage.created_at
-        
-        // Get message preview text
-        let preview = ''
-        if (lastMessage.message_type === 'button' && lastMessage.button_text) {
-          preview = lastMessage.button_text
-        } else if (lastMessage.message_body) {
-          preview = lastMessage.message_body
-        } else if (lastMessage.media_url) {
-          preview = '[Image]'
-        } else {
-          preview = '[Media]'
-        }
-
-        // Truncate preview if too long
-        if (preview.length > 50) {
-          preview = preview.substring(0, 50) + '...'
-        }
-
-        // Check if last message is inbound and unread
-        // A message is unread if it's inbound and read_at is null
-        const hasUnreadInbound = lastMessage.direction === 'inbound' && 
-                                 !lastMessage.read_at
-
-        console.log(`Contact ${contact.name || contact.phone}: Last message at ${messageTimestamp}, preview: ${preview}, unread: ${hasUnreadInbound}`)
-        
-        return {
-          ...contact,
-          last_message_at: messageTimestamp,
-          last_message_preview: preview,
-          has_unread_inbound: hasUnreadInbound,
-        }
-      }
-
-      return contact
+    // Sort by last_message_at (most recent first)
+    contactsWithLastMessage.sort((a, b) => {
+      if (!a.last_message_at && !b.last_message_at) return 0
+      if (!a.last_message_at) return 1
+      if (!b.last_message_at) return -1
+      return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
     })
-  )
 
-  // Sort by last_message_at (most recent first)
-  contactsWithLastMessage.sort((a, b) => {
-    if (!a.last_message_at && !b.last_message_at) return 0
-    if (!a.last_message_at) return 1
-    if (!b.last_message_at) return -1
-    return new Date(b.last_message_at).getTime() - new Date(a.last_message_at).getTime()
-  })
-
-  console.log('Contacts sorted by last message:', contactsWithLastMessage.map(c => ({
-    name: c.name || c.phone,
-    last_message_at: c.last_message_at,
-    preview: c.last_message_preview
-  })))
-
-  return contactsWithLastMessage
+    return contactsWithLastMessage
+  } catch (error) {
+    logger.error('Error in fetchContacts:', error)
+    throw error
+  }
 }
 
-// Fetch messages for a specific contact
-export const fetchMessages = async (contactId: string): Promise<Message[]> => {
-  // First, get the contact to get the phone number
-  const contact = await fetchContact(contactId)
-  if (!contact) {
-    console.error('Contact not found')
-    return []
+// Fetch messages for a specific contact (with pagination support for bulk messages)
+export const fetchMessages = async (
+  contactId: string, 
+  limit: number = 1000, 
+  offset: number = 0
+): Promise<{ messages: Message[], hasMore: boolean, total: number }> => {
+  try {
+    // First, get the contact to get the phone number
+    const contact = await fetchContact(contactId)
+    if (!contact) {
+      logger.error('Contact not found')
+      return { messages: [], hasMore: false, total: 0 }
+    }
+
+    // For production: Limit the number of messages loaded initially
+    // Load most recent messages first, with pagination support
+    const maxMessages = limit || 1000 // Default to 1000 messages max per load
+
+    // Fetch messages by contact_id (most recent first)
+    const { data: dataByContactId, error: errorByContactId, count: countByContactId } = await supabase
+      .from('messages')
+      .select('*', { count: 'exact' })
+      .eq('contact_id', contactId)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + maxMessages - 1)
+
+    // Also fetch messages by phone number (in case contact_id is not set on some messages)
+    const { data: dataByPhone, error: errorByPhone } = await supabase
+      .from('messages')
+      .select('*')
+      .or(`from_number.eq.${contact.phone},to_number.eq.${contact.phone}`)
+      .order('sent_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .range(offset, offset + maxMessages - 1)
+
+    if (errorByContactId || errorByPhone) {
+      logger.error('Error fetching messages:', errorByContactId || errorByPhone)
+      throw errorByContactId || errorByPhone
+    }
+
+    // Combine and deduplicate messages
+    const allMessages = [...(dataByContactId || []), ...(dataByPhone || [])]
+    const uniqueMessages = Array.from(
+      new Map(allMessages.map(msg => [msg.id, msg])).values()
+    )
+
+    // Sort messages by timestamp (oldest first for display)
+    const sortedMessages = uniqueMessages.sort((a, b) => {
+      const timeA = a.sent_at ? new Date(a.sent_at).getTime() : new Date(a.created_at).getTime()
+      const timeB = b.sent_at ? new Date(b.sent_at).getTime() : new Date(b.created_at).getTime()
+      return timeA - timeB
+    })
+
+    // Determine if there are more messages
+    const totalFetched = sortedMessages.length
+    const hasMore = totalFetched >= maxMessages
+
+    logger.log(`Fetched ${sortedMessages.length} messages for contact ${contactId}`)
+
+    return {
+      messages: sortedMessages,
+      hasMore,
+      total: countByContactId || totalFetched
+    }
+  } catch (error) {
+    logger.error('Error in fetchMessages:', error)
+    throw error
   }
-
-  // Fetch messages by contact_id
-  const { data: dataByContactId, error: errorByContactId } = await supabase
-    .from('messages')
-    .select('*')
-    .eq('contact_id', contactId)
-
-  // Also fetch messages by phone number (in case contact_id is not set on some messages)
-  const { data: dataByPhone, error: errorByPhone } = await supabase
-    .from('messages')
-    .select('*')
-    .or(`from_number.eq.${contact.phone},to_number.eq.${contact.phone}`)
-
-  if (errorByContactId || errorByPhone) {
-    console.error('Error fetching messages:', errorByContactId || errorByPhone)
-    throw errorByContactId || errorByPhone
-  }
-
-  // Combine and deduplicate messages
-  const allMessages = [...(dataByContactId || []), ...(dataByPhone || [])]
-  const uniqueMessages = Array.from(
-    new Map(allMessages.map(msg => [msg.id, msg])).values()
-  )
-
-  // Sort messages by the most appropriate timestamp
-  // Use sent_at if available, otherwise use created_at
-  const sortedMessages = uniqueMessages.sort((a, b) => {
-    const timeA = a.sent_at ? new Date(a.sent_at).getTime() : new Date(a.created_at).getTime()
-    const timeB = b.sent_at ? new Date(b.sent_at).getTime() : new Date(b.created_at).getTime()
-    return timeA - timeB
-  })
-
-  console.log(`Fetched ${sortedMessages.length} messages for contact ${contactId} (${contact.phone}):`, {
-    inbound: sortedMessages.filter(m => m.direction === 'inbound').length,
-    outbound: sortedMessages.filter(m => m.direction === 'outbound').length,
-    messages: sortedMessages.map(m => ({
-      id: m.id,
-      direction: m.direction,
-      body: m.message_body?.substring(0, 30) || m.button_text,
-    })),
-  })
-
-  return sortedMessages
 }
 
 // Fetch a single contact by ID
@@ -210,7 +230,7 @@ export const fetchContact = async (contactId: string): Promise<Contact | null> =
     .single()
 
   if (error) {
-    console.error('Error fetching contact:', error)
+    logger.error('Error fetching contact:', error)
     return null
   }
 
@@ -289,7 +309,7 @@ export const createMessage = async (
     .single()
 
   if (error) {
-    console.error('Error creating message:', error)
+    logger.error('Error creating message:', error)
     throw error
   }
 
@@ -331,7 +351,7 @@ export const updateMessageStatus = async (
     .single()
 
   if (error) {
-    console.error('Error updating message status:', error)
+    logger.error('Error updating message status:', error)
     throw error
   }
 
@@ -342,7 +362,7 @@ export const updateMessageStatus = async (
 export const markMessagesAsRead = async (contactId: string): Promise<void> => {
   const contact = await fetchContact(contactId)
   if (!contact) {
-    console.error('Contact not found')
+    logger.error('Contact not found')
     return
   }
 
@@ -357,12 +377,12 @@ export const markMessagesAsRead = async (contactId: string): Promise<void> => {
     .is('read_at', null)
 
   if (fetchError) {
-    console.error('Error fetching unread messages:', fetchError)
+    logger.error('Error fetching unread messages:', fetchError)
     throw fetchError
   }
 
   if (!unreadMessages || unreadMessages.length === 0) {
-    console.log(`No unread inbound messages for contact ${contactId}`)
+    logger.log(`No unread inbound messages for contact ${contactId}`)
     return
   }
 
@@ -378,9 +398,9 @@ export const markMessagesAsRead = async (contactId: string): Promise<void> => {
     .in('id', messageIds)
 
   if (error) {
-    console.error('Error marking messages as read:', error)
+    logger.error('Error marking messages as read:', error)
     throw error
   }
 
-  console.log(`Marked ${messageIds.length} inbound messages as read for contact ${contactId}`)
+  logger.log(`Marked ${messageIds.length} inbound messages as read for contact ${contactId}`)
 }

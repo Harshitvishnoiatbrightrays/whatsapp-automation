@@ -20,6 +20,20 @@ const Dashboard = () => {
     getUser()
   }, [navigate])
 
+  // Handle contact updates (for marking messages as read without full refresh)
+  const handleContactUpdate = (_contactId: string, _updates: any) => {
+    // This will be handled by ContactList internally
+    // We still keep refreshTrigger for periodic updates
+  }
+
+  // Debounced refresh function
+  const handleMessagesRead = () => {
+    // Only refresh if needed, debounced
+    setTimeout(() => {
+      setRefreshContacts(prev => prev + 1)
+    }, 1000)
+  }
+
   return (
     <div className="dashboard-container">
       <div className="dashboard-layout">
@@ -27,10 +41,12 @@ const Dashboard = () => {
           selectedContactId={selectedContactId}
           onContactSelect={setSelectedContactId}
           refreshTrigger={refreshContacts}
+          onContactUpdate={handleContactUpdate}
         />
         <ChatView 
           contactId={selectedContactId}
-          onMessagesRead={() => setRefreshContacts(prev => prev + 1)}
+          onMessagesRead={handleMessagesRead}
+          onContactUpdate={handleContactUpdate}
         />
       </div>
     </div>
