@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback, useMemo, memo } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { fetchMessages, fetchContact, markMessagesAsRead, Message, Contact } from '../services/supabaseService'
 import MessageInput from './MessageInput'
 import './ChatView.css'
