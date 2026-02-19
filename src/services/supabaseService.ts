@@ -43,6 +43,102 @@ export interface Message {
   updated_at: string
 }
 
+// Fetch contact IDs and phone numbers that have at least one failed outbound message
+export const fetchContactIdsWithFailedMessages = async (): Promise<{
+  contactIds: Set<string>
+  phoneNumbers: Set<string>
+}> => {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('contact_id, to_number')
+      .eq('direction', 'outbound')
+      .eq('status', 'failed')
+
+    if (error) {
+      logger.error('Error fetching failed message contacts:', error)
+      throw error
+    }
+
+    const contactIds = new Set<string>()
+    const phoneNumbers = new Set<string>()
+
+    ;(data || []).forEach((row: { contact_id: string | null; to_number: string }) => {
+      if (row.contact_id) contactIds.add(row.contact_id)
+      if (row.to_number) phoneNumbers.add(row.to_number)
+    })
+
+    return { contactIds, phoneNumbers }
+  } catch (error) {
+    logger.error('Error in fetchContactIdsWithFailedMessages:', error)
+    throw error
+  }
+}
+
+async function fetchContactIdsByOutboundStatus(
+  status: string
+): Promise<{ contactIds: Set<string>; phoneNumbers: Set<string> }> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('contact_id, to_number')
+    .eq('direction', 'outbound')
+    .eq('status', status)
+
+  if (error) {
+    logger.error(`Error fetching contacts with ${status} messages:`, error)
+    throw error
+  }
+
+  const contactIds = new Set<string>()
+  const phoneNumbers = new Set<string>()
+  ;(data || []).forEach((row: { contact_id: string | null; to_number: string }) => {
+    if (row.contact_id) contactIds.add(row.contact_id)
+    if (row.to_number) phoneNumbers.add(row.to_number)
+  })
+  return { contactIds, phoneNumbers }
+}
+
+// Fetch contact IDs and phone numbers that have at least one delivered outbound message
+export const fetchContactIdsWithDeliveredMessages = async (): Promise<{
+  contactIds: Set<string>
+  phoneNumbers: Set<string>
+}> => fetchContactIdsByOutboundStatus('delivered')
+
+// Fetch contact IDs and phone numbers that have at least one read outbound message
+export const fetchContactIdsWithReadMessages = async (): Promise<{
+  contactIds: Set<string>
+  phoneNumbers: Set<string>
+}> => fetchContactIdsByOutboundStatus('read')
+
+// Fetch contact IDs and phone numbers that have replied (at least one inbound message)
+export const fetchContactIdsWithRepliedMessages = async (): Promise<{
+  contactIds: Set<string>
+  phoneNumbers: Set<string>
+}> => {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('contact_id, from_number')
+      .eq('direction', 'inbound')
+
+    if (error) {
+      logger.error('Error fetching replied contacts:', error)
+      throw error
+    }
+
+    const contactIds = new Set<string>()
+    const phoneNumbers = new Set<string>()
+    ;(data || []).forEach((row: { contact_id: string | null; from_number: string }) => {
+      if (row.contact_id) contactIds.add(row.contact_id)
+      if (row.from_number) phoneNumbers.add(row.from_number)
+    })
+    return { contactIds, phoneNumbers }
+  } catch (error) {
+    logger.error('Error in fetchContactIdsWithRepliedMessages:', error)
+    throw error
+  }
+}
+
 // Fetch all contacts with their actual last message (optimized for production)
 export const fetchContacts = async (): Promise<Contact[]> => {
   try {

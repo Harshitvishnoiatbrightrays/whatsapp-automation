@@ -140,6 +140,56 @@
   background-color: #e9edef;
 }
 
+.contact-list-filter {
+  padding: 0.5rem 0.75rem;
+  background-color: #fafafa;
+  border-bottom: 1px solid #e9edef;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.filter-label {
+  font-size: 0.75rem;
+  color: #667781;
+  font-weight: 500;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.filter-chip {
+  padding: 0.35rem 0.75rem;
+  border-radius: 16px;
+  border: 1px solid #e9edef;
+  background-color: #ffffff;
+  color: #54656f;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+
+.filter-chip:hover {
+  background-color: #f0f2f5;
+  border-color: #d1d7db;
+  color: #111b21;
+}
+
+.filter-chip.active {
+  background-color: #25d366;
+  border-color: #25d366;
+  color: #ffffff;
+}
+
+.filter-chip.active:hover {
+  background-color: #20bd5a;
+  border-color: #20bd5a;
+  color: #ffffff;
+}
+
 .contact-list-items {
   flex: 1;
   overflow-y: auto;

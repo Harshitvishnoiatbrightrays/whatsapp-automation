@@ -1,5 +1,12 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-import { fetchContacts, Contact } from '../services/supabaseService'
+import {
+  fetchContacts,
+  fetchContactIdsWithFailedMessages,
+  fetchContactIdsWithDeliveredMessages,
+  fetchContactIdsWithReadMessages,
+  fetchContactIdsWithRepliedMessages,
+  Contact,
+} from '../services/supabaseService'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import './ContactList.css'
@@ -59,6 +66,11 @@ const ContactList = ({ selectedContactId, onContactSelect, refreshTrigger, onCon
   const [loading, setLoading] = useState(true)
   const [showMenu, setShowMenu] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  type MessageStatusFilter = 'all' | 'not_failed' | 'failed' | 'delivered' | 'read' | 'replied'
+  const [messageStatusFilter, setMessageStatusFilter] = useState<MessageStatusFilter>('all')
+  const [filterContactIds, setFilterContactIds] = useState<Set<string>>(new Set())
+  const [filterPhoneNumbers, setFilterPhoneNumbers] = useState<Set<string>>(new Set())
+  const [loadingFilterIds, setLoadingFilterIds] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const navigate = useNavigate()
   const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -83,24 +95,72 @@ const ContactList = ({ selectedContactId, onContactSelect, refreshTrigger, onCon
     }
   }, [])
 
-  // Filter contacts based on search query
+  // Fetch contact IDs for the active message-status filter
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredContacts(contacts)
-      return
+    if (messageStatusFilter === 'all') return
+
+    let cancelled = false
+    setLoadingFilterIds(true)
+    const fetcher =
+      messageStatusFilter === 'failed' || messageStatusFilter === 'not_failed'
+        ? fetchContactIdsWithFailedMessages()
+        : messageStatusFilter === 'delivered'
+          ? fetchContactIdsWithDeliveredMessages()
+          : messageStatusFilter === 'read'
+            ? fetchContactIdsWithReadMessages()
+            : fetchContactIdsWithRepliedMessages()
+
+    fetcher
+      .then(({ contactIds, phoneNumbers }) => {
+        if (!cancelled) {
+          setFilterContactIds(contactIds)
+          setFilterPhoneNumbers(phoneNumbers)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFilterContactIds(new Set())
+          setFilterPhoneNumbers(new Set())
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFilterIds(false)
+      })
+    return () => { cancelled = true }
+  }, [messageStatusFilter])
+
+  const isContactInFilterSet = useCallback(
+    (contact: Contact) => filterContactIds.has(contact.id) || filterPhoneNumbers.has(contact.phone),
+    [filterContactIds, filterPhoneNumbers]
+  )
+
+  // Filter contacts based on search query and message status filter
+  useEffect(() => {
+    let result = contacts
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim()
+      result = result.filter((contact) => {
+        const name = (contact.name || '').toLowerCase()
+        const phone = contact.phone.toLowerCase()
+        const preview = (contact.last_message_preview || '').toLowerCase()
+        return name.includes(query) || phone.includes(query) || preview.includes(query)
+      })
     }
 
-    const query = searchQuery.toLowerCase().trim()
-    const filtered = contacts.filter((contact) => {
-      const name = (contact.name || '').toLowerCase()
-      const phone = contact.phone.toLowerCase()
-      const preview = (contact.last_message_preview || '').toLowerCase()
-      
-      return name.includes(query) || phone.includes(query) || preview.includes(query)
-    })
-    
-    setFilteredContacts(filtered)
-  }, [searchQuery, contacts])
+    if (messageStatusFilter === 'not_failed') {
+      result = result.filter((c) => !isContactInFilterSet(c))
+    } else if (
+      messageStatusFilter === 'failed' ||
+      messageStatusFilter === 'delivered' ||
+      messageStatusFilter === 'read' ||
+      messageStatusFilter === 'replied'
+    ) {
+      result = result.filter(isContactInFilterSet)
+    }
+
+    setFilteredContacts(result)
+  }, [searchQuery, contacts, messageStatusFilter, isContactInFilterSet])
 
   // Initial load and refresh trigger
   useEffect(() => {
@@ -275,6 +335,59 @@ const ContactList = ({ selectedContactId, onContactSelect, refreshTrigger, onCon
         </div>
       </div>
 
+      <div className="contact-list-filter">
+        <span className="filter-label">Message status:</span>
+        <div className="filter-chips">
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'all' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'not_failed' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('not_failed')}
+            title="Contacts with no failed outbound messages"
+          >
+            {loadingFilterIds && messageStatusFilter === 'not_failed' ? '...' : 'Successful only'}
+          </button>
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'failed' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('failed')}
+            title="Contacts that have at least one failed message"
+          >
+            {loadingFilterIds && messageStatusFilter === 'failed' ? '...' : 'Failed'}
+          </button>
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'delivered' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('delivered')}
+            title="Contacts with at least one delivered message"
+          >
+            {loadingFilterIds && messageStatusFilter === 'delivered' ? '...' : 'Delivered'}
+          </button>
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'read' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('read')}
+            title="Contacts with at least one read message"
+          >
+            {loadingFilterIds && messageStatusFilter === 'read' ? '...' : 'Read'}
+          </button>
+          <button
+            type="button"
+            className={`filter-chip ${messageStatusFilter === 'replied' ? 'active' : ''}`}
+            onClick={() => setMessageStatusFilter('replied')}
+            title="Contacts who have replied (sent inbound messages)"
+          >
+            {loadingFilterIds && messageStatusFilter === 'replied' ? '...' : 'Replied'}
+          </button>
+        </div>
+      </div>
+
       <div className="contact-list-items">
         {loading && contacts.length === 0 ? (
           <div className="contact-list-loading">
@@ -283,7 +396,19 @@ const ContactList = ({ selectedContactId, onContactSelect, refreshTrigger, onCon
           </div>
         ) : filteredContacts.length === 0 ? (
           <div className="contact-list-empty">
-            {searchQuery ? `No contacts found for "${searchQuery}"` : 'No contacts found'}
+            {searchQuery
+              ? `No contacts found for "${searchQuery}"`
+              : messageStatusFilter === 'failed'
+                ? 'No contacts with failed messages'
+                : messageStatusFilter === 'not_failed'
+                  ? 'No contacts without failed messages'
+                  : messageStatusFilter === 'delivered'
+                    ? 'No contacts with delivered messages'
+                    : messageStatusFilter === 'read'
+                      ? 'No contacts with read messages'
+                      : messageStatusFilter === 'replied'
+                        ? 'No contacts have replied yet'
+                        : 'No contacts found'}
           </div>
         ) : (
           <>
